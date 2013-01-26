@@ -353,8 +353,12 @@ and ignores this variable."
 ;;; SXEmacs addition
 (defcustom find-file-magic-files-alist
   '((file-directory-p . find-file-try-dired-noselect))
-  "Alist where each element is in form \(PREDICATE . FUNCTION-OF-ONE-ARGUMENT\).
-FUNCTION-OF-ONE-ARGUMENT must return some buffer."
+  "Alist where each element is in form \(PREDICATE . NOSELECT-FUNCTION\).
+PREDICATED accepts single argument - filename, and return non-nil
+if NOSELECT-FUNCTION can open the filename file.
+NOSELECT-FUNCTION accepts single argument - filename and must return buffer.
+If NOSELECT-FUNCTION calls to `find-file-noselect' it MUST bind 
+`find-file-magic-files-alist' to nil, otherwise infinite loop is caused."
   :type 'alist
   :group 'find-file)
 
