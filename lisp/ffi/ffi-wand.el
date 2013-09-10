@@ -2927,6 +2927,11 @@ BLUR is float, 0.25 for insane pixels, > 2.0 for excessively smoth."
       (unless (Wand:read-image image-wand file)
 	(kill-buffer (current-buffer))
 	(error "Can't read file %s" file))
+
+      ;; NOTE: New IM sets iterator index to last page, we want to
+      ;; start from the first page
+      (setf (Wand:iterator-index image-wand) 0)
+
       (when Wand-mode-auto-rotate
 	(Wand:correct-orientation image-wand))
 
