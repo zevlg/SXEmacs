@@ -484,6 +484,17 @@ Strips last N words."
 	  (mapcar #'car (ffi-enum-values 'MagickPreviewType)))
   "Completion table for preview types.")
 
+(define-ffi-enum MagickOrientationType
+  :UndefinedOrientation
+  :TopLeftOrientation
+  :TopRightOrientation
+  :BottomRightOrientation
+  :BottomLeftOrientation
+  :LeftTopOrientation
+  :RightTopOrientation
+  :RightBottomOrientation
+  :LeftBottomOrientation)
+
 ;;}}}
 ;;{{{  `-- Wand:version
 
@@ -786,6 +797,23 @@ Use \(setf \(Wand:image-format w\) FMT\) to set new one."
   MagickBooleanType
   (wand MagickWand)
   (cst MagickColorspaceType))
+
+(cffi:defcfun ("MagickGetImageOrientation" Wand:GetImageOrientation)
+  MagickOrientationType
+  (wand MagickWand))
+
+(cffi:defcfun ("MagickSetImageOrientation" Wand:SetImageOrientation)
+  MagickBooleanType
+  (wand MagickWand)
+  (orient MagickOrientationType))
+
+(defun Wand:image-orientation (w)
+  "Return orientation for the image hold by W.
+Use \(setf \(Wand:image-orientation w\) orient\) to set new one."
+  (Wand:GetImageOrientation w))
+
+(defsetf Wand:image-orientation (w) (orient)
+  `(Wand:SetImageOrientation ,w ,orient))
 
 ;;}}}
 ;;{{{  `-- PixelWand operations
@@ -1352,6 +1380,11 @@ effect to wipe hard contrasts."
   (w MagickWand) (pname c-string)
   (prof pointer) (sz unsigned-int))
 
+(cffi:defcfun ("MagickRemoveImageProfile" Wand:MagickRemoveImageProfile) pointer
+  (w MagickWand)
+  (pname c-string)
+  (plen pointer))
+
 (defconst Wand-iptc-names-table
   '((120 . caption) (25 . keyword)))
 
@@ -1404,6 +1437,10 @@ effect to wipe hard contrasts."
 	(Wand:MagickSetImageProfile w "iptc" prof oolen)))
     ))
 
+(defun Wand:image-remove-profile (wand profname)
+  (let* ((plen (make-ffi-object 'unsigned-int)))
+    (Wand:MagickRemoveImageProfile wand profname (ffi-address-of plen))))
+
 ;;}}}
 ;;{{{  `-- Image properties
 
@@ -1426,6 +1463,10 @@ effect to wipe hard contrasts."
   MagickBooleanType
   (w MagickWand) (prop c-string) (val c-string))
 
+(cffi:defcfun ("MagickDeleteImageProperty" Wand:MagickDeleteImageProperty)
+  MagickBooleanType
+  (w MagickWand) (prop c-string))
+
 (defun Wand:image-property (w property)
   "Return value for PROPERTY.
 Use \(setf \(Wand:image-property w prop\) VAL\) to set property."
@@ -1436,7 +1477,11 @@ Use \(setf \(Wand:image-property w prop\) VAL\) to set property."
 	(Wand:RelinquishMemory pv)))))
 
 (defsetf Wand:image-property (w prop) (val)
-  `(Wand:MagickSetImageProperty ,w ,prop ,val))
+  (let ((vsym (gensym "vsym-")))
+    `(let ((,vsym ,val))
+       (if ,vsym
+           (Wand:MagickSetImageProperty ,w ,prop ,vsym)
+         (Wand:MagickDeleteImageProperty ,w ,vsym)))))
 
 (cffi:defcfun ("MagickGetQuantumRange" Wand:MagickGetQuantumRange) pointer
   (qr (pointer unsigned-long)))
@@ -1906,13 +1951,13 @@ FN might be a string or wand-font object."
   (make-glyph (Wand:emacs-image wand)))
 
 (defun Wand:correct-orientation (wand)
-  "Automatically rotate WAND image according to exif:Orientation."
-  (let* ((orient (Wand:image-property wand "exif:Orientation"))
-	 (angle (cond ((string= orient "6") 90)
-		      ((string= orient "3") 180)
-		      ((string= orient "8") -90))))
+  "Automatically rotate WAND image according to orientation."
+  (let ((angle (case (Wand:image-orientation wand)
+                 (:RightTopOrientation 90)
+                 (:BottomRightOrientation 180)
+                 (:LeftBottomOrientation -90))))
     (when angle
-      (setf (Wand:image-property wand "exif:Orientation") "1")
+      (setf (Wand:image-orientation wand) :TopLeftOrientation)
       (Wand-operation-apply 'rotate wand angle))))
 
 (defun Wand:fit-size (wand max-width max-height &optional scaler force)
@@ -2545,9 +2590,9 @@ BLUR is float, 0.25 for insane pixels, > 2.0 for excessively smoth."
   "Return region in real image, according to `preview-region'."
   (let ((off-x (get preview-wand 'offset-x))
 	(off-y (get preview-wand 'offset-y))
-	(xcoeff (// (Wand:image-width image-wand)
+	(xcoeff (// (float (Wand:image-width image-wand))
 		    (Wand:image-width preview-wand)))
-	(ycoeff (// (Wand:image-height image-wand)
+	(ycoeff (// (float (Wand:image-height image-wand))
 		    (Wand:image-height preview-wand))))
     (mapcar #'round (list (* (nth 0 preview-region) xcoeff)
 			  (* (nth 1 preview-region) ycoeff)
@@ -3582,7 +3627,7 @@ If FACTOR is nil, then `Wand-mode-zoom-factor' is used."
 	       (format "Width [%d]: " (Wand:image-width image-wand))
 	       t (int-to-string (Wand:image-width image-wand))))
 	  (dh (round (* (Wand:image-height image-wand)
-			(// dw (Wand:image-width image-wand))))))
+			(// (float dw) (Wand:image-width image-wand))))))
      (list dw (read-number (format "Height [%d]: " dh)
 			   t (int-to-string dh)))))
 
@@ -3764,14 +3809,7 @@ example zoom."
 	    (not (file-exists-p nfile))
 	    (y-or-n-p (format "File %s exists, overwrite? " nfile)))
     (setf (Wand:image-format image-wand) format)
-    (let ((saved-iw image-wand))        ; do this because it is buffer-local
-      (with-temp-buffer
-	(insert (Wand:image-blob saved-iw))
-	(set-visited-file-name nfile t)
-	(set-buffer-modified-p t)
-	(setq buffer-read-only nil)
-	(let ((buffer-file-coding-system (get-coding-system 'binary)))
-	  (save-buffer))))
+    (Wand:write-image image-wand nfile)
     (message "File %s saved" nfile)
 
     ;; Redisplay in case we can do it
