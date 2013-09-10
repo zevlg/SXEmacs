@@ -1061,6 +1061,12 @@ CLS is list of lists of N int elements representing RBG(A) values."
   "Decrease the contrast of the image associated with WAND."
   (Wand:MagickContrastImage wand nil))
 
+;; Non-linear contrast changer
+(cffi:defcfun ("MagickSigmoidalContrastImage" Wand:MagickSigmoidalContrastImage)
+  MagickBooleanType
+  (wand MagickWand) (contrast MagickBooleanType)
+  (alpha double) (betta double))
+
 ;; Reduce the speckle noise in the image associated with WAND.
 (cffi:defcfun ("MagickDespeckleImage" Wand:despeckle-image) MagickBooleanType
   (wand MagickWand))
@@ -2290,6 +2296,14 @@ This is NOT lossless rotation for jpeg-like formats."
   (Wand-possible-for-region wand
     (Wand:MagickContrastImage wand cp)))
 
+(define-Wand-operation sigmoidal-contrast (wand cp strength midpoint)
+  "Increase/decrease contrast of the image.
+CP - `t' to increase, `nil' to decrease.
+STRENGTH - larger the number the more 'threshold-like' it becomes.
+MIDPOINT - midpoint of the function as a color value 0 to QuantumRange"
+  (Wand-possible-for-region wand
+    (Wand:MagickSigmoidalContrastImage wand cp strength midpoint)))
+
 (define-Wand-operation normalize (wand)
   "Normalise image."
   (Wand-possible-for-region wand
@@ -2801,19 +2815,22 @@ BLUR is float, 0.25 for insane pixels, > 2.0 for excessively smoth."
     ;; If last character is \n, try to remove it before calculating
     ;; displayed-text-pixel-height, and then restore
     ;; Rescale preview to fit the window
-    (let ((scale-h (- (window-text-area-pixel-height)
-		      (if (zerop (buffer-size)) 0
-			(unwind-protect
-			    (progn
-			      (backward-delete-char)
-			      (window-displayed-text-pixel-height))
-			  (insert "\n")))))
-	  (scale-w (window-text-area-pixel-width)))
-      (when (and (get image-wand 'fitting)
-		 (Wand:fit-size preview-wand scale-w scale-h))
-	(message "Rescale to %dx%d"
-		 (Wand:image-width preview-wand)
-		 (Wand:image-height preview-wand))))
+    (save-window-excursion
+      (set-window-buffer (selected-window) (current-buffer) t)
+      (let ((scale-h (- (window-text-area-pixel-height)
+                        (if (zerop (buffer-size)) 0
+                          (unwind-protect
+                              (progn
+                                (backward-delete-char)
+                                (window-displayed-text-pixel-height))
+                            (insert "\n")))))
+            (scale-w (window-text-area-pixel-width)))
+        (when (and (get image-wand 'fitting)
+                   (Wand:fit-size preview-wand scale-w scale-h))
+          (message "Rescale to %dx%d (fitting %dx%d)"
+                   (Wand:image-width preview-wand)
+                   (Wand:image-height preview-wand)
+                   scale-w scale-h))))
 
     ;; Set offset properties
     (if (and (eq saved-w (Wand:image-width preview-wand))
@@ -3318,6 +3335,19 @@ By default increase."
   (Wand-redisplay))
 (put 'Wand-mode-contrast 'enhance-operation t)
 (put 'Wand-mode-contrast 'menu-name "Contrast")
+
+(defun Wand-mode-sigmoidal-contrast (ctype strength midpoint)
+  "Apply sigmoidal contrast adjustement."
+  (interactive (list (completing-read
+		      "Contrast [increase]: " '(("increase") ("decrease"))
+		      nil t nil nil "increase")
+                     (read-number "Strength [5]: " nil "5")
+                     (read-number "Midpoint [0%]: " nil "0")))
+  (Wand-operation-apply 'sigmoidal-contrast image-wand
+                        (string= ctype "increase") (float strength) (* (Wand:quantum-range) (/ midpoint 100.0)))
+  (Wand-redisplay))
+(put 'Wand-mode-sigmoidal-contrast 'enhance-operation t)
+(put 'Wand-mode-sigmoidal-contrast 'menu-name "Sigmoidal Contrast")
 
 (defun Wand-mode-normalize ()
   "Normalize image."
