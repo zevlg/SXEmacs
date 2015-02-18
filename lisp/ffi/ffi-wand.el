@@ -45,6 +45,14 @@
 ;;   so be careful.  Need some assistance from IM developers to solve
 ;;   this problem.
 ;;
+;; - Opening PDF files might fail with "Postscript delegate failed
+;;   `<file>' : No such file or directory @ error/pdf.c/ReadPDFImage/677
+;; 
+;;     Most possible solution is to set `density` in wand->image_info
+;;     to 200 for example. see
+;;     http://stackoverflow.com/questions/9783216/convert-postscript-delegate-failed
+;;       also
+;;     https://lists.ubuntu.com/archives/foundations-bugs/2012-September/113893.html
 ;;
 ;;}}}
 ;;; Code:
@@ -91,7 +99,7 @@
   (id unsigned-long)
   (name (array char 4096))
   (exception pointer)
-  (image-info pointer)
+  (image-info pointer)                  ; ImageInfo*
   (quantize-info pointer)
   (images pointer)
   (active MagickBooleanType)
@@ -659,6 +667,17 @@ PROP can be one of: `base', `channels', `colorspace', `depth',
 
 (cffi:defcfun ("MagickSetLastIterator" Wand:set-last-iterator) void
   (wand MagickWand))
+
+;;}}}
+;;{{{  `-- Exceptions
+
+(cffi:defcfun ("MagickGetException" Wand:MagickGetException) c-string
+  (wand MagickWand)
+  (exception (pointer MagickExceptionType)))
+
+(defun Wand:exception (wand)
+  "Returns reason of any error that occurs when using API."
+  (Wand:MagickGetException wand (ffi-address-of (make-ffi-object 'MagickExceptionType))))
 
 ;;}}}
 ;;{{{  `-- Image data input/output
@@ -2925,8 +2944,9 @@ BLUR is float, 0.25 for insane pixels, > 2.0 for excessively smoth."
       (setq default-directory (file-name-directory file))
 
       (unless (Wand:read-image image-wand file)
-	(kill-buffer (current-buffer))
-	(error "Can't read file %s" file))
+        (unwind-protect
+            (error "Can't read file %s: %s" file (Wand:exception image-wand))
+          (kill-buffer (current-buffer))))
 
       ;; NOTE: New IM sets iterator index to last page, we want to
       ;; start from the first page
@@ -3134,6 +3154,7 @@ If REVERSE-ORDER is specified, then return previous file."
   (unless (Wand:has-next-image image-wand)
     (error "No next image in chain"))
   (Wand:next-image image-wand)
+  (Wand-operation-list-apply image-wand)
   (Wand-redisplay))
 
 (defun Wand-mode-prev-page ()
@@ -3142,18 +3163,21 @@ If REVERSE-ORDER is specified, then return previous file."
   (unless (Wand:has-prev-image image-wand)
     (error "No previous image in chain"))
   (Wand:prev-image image-wand)
+  (Wand-operation-list-apply image-wand)
   (Wand-redisplay))
 
 (defun Wand-mode-first-page ()
   "Display first image in image chain."
   (interactive)
   (Wand:set-first-iterator image-wand)
+  (Wand-operation-list-apply image-wand)
   (Wand-redisplay))
 
 (defun Wand-mode-last-page ()
   "Display last image in image chain."
   (interactive)
   (Wand:set-last-iterator image-wand)
+  (Wand-operation-list-apply image-wand)
   (Wand-redisplay))
 
 (defun Wand-mode-goto-page (n)
@@ -3165,6 +3189,7 @@ If REVERSE-ORDER is specified, then return previous file."
   ;; Internally images in chain counts from 0
   (unless (setf (Wand:iterator-index image-wand) (1- n))
     (error "No such page" n))
+  (Wand-operation-list-apply image-wand)
   (Wand-redisplay))
 
 ;;}}}
@@ -3783,9 +3808,12 @@ A-la `list-colors-display'."
     (push (car (last operations-list)) undo-list)
     (setq operations-list (butlast operations-list)))
 
-  ;; Update wand
-  (Wand:clear-wand image-wand)
-  (Wand:read-image image-wand buffer-file-name)
+  ;; Update wand keeping current page
+  (let ((page (Wand:iterator-index image-wand)))
+    (Wand:clear-wand image-wand)
+    (Wand:read-image image-wand buffer-file-name)
+    (setf (Wand:iterator-index image-wand) page))
+
   (Wand-operation-list-apply image-wand)
   (Wand-redisplay)
   (message "Undo!"))
